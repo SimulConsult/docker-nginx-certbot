@@ -1,4 +1,4 @@
-FROM nginx:1.23.3
+FROM nginx:1.27.0
 LABEL maintainer="Jonas Alfredsson <jonas.alfredsson@protonmail.com>"
 
 ENV CERTBOT_DNS_AUTHENTICATORS \
@@ -16,7 +16,17 @@ ENV CERTBOT_DNS_AUTHENTICATORS \
     rfc2136 \
     route53 \
     sakuracloud \
-    ionos
+    ionos \
+    bunny
+
+# Needed in order to install Python packages via PIP after PEP 668 was
+# introduced, but I believe this is safe since we are in a container without
+# any real need to cater to other programs/environments.
+ARG PIP_BREAK_SYSTEM_PACKAGES=1
+
+# Through this we gain the ability to handle certbot upgrades through
+# dependabot pull requests.
+COPY requirements.txt /requirements.txt
 
 # Do a single run command to make the intermediary containers smaller.
 RUN set -ex && \
@@ -26,10 +36,11 @@ RUN set -ex && \
             build-essential \
             cargo \
             curl \
-            libffi7 \
+            libffi8 \
             libffi-dev \
             libssl-dev \
             openssl \
+            pkg-config \
             procps \
             python3 \
             python3-dev \
@@ -37,10 +48,9 @@ RUN set -ex && \
 # Install the latest version of PIP, Setuptools and Wheel.
     curl -L 'https://bootstrap.pypa.io/get-pip.py' | python3 && \
 # Install certbot.
-    pip3 install -U cffi certbot \
-# And the supported extra authenticators
-        $(echo $CERTBOT_DNS_AUTHENTICATORS | sed 's/\(^\| \)/\1certbot-dns-/g') \
-    && \
+    pip3 install -r /requirements.txt && \
+# And the supported extra authenticators.
+    pip3 install $(echo $CERTBOT_DNS_AUTHENTICATORS | sed 's/\(^\| \)/\1certbot-dns-/g') && \
 # Remove everything that is no longer necessary.
     apt-get remove --purge -y \
             build-essential \
@@ -48,16 +58,8 @@ RUN set -ex && \
             curl \
             libffi-dev \
             libssl-dev \
+            pkg-config \
             python3-dev \
-    && \
-# Because of the same bug which was fixed in
-# https://github.com/JonasAlfredsson/docker-nginx-certbot/commit/3855a173f6ce1bc49318cdc7c3a40e4443e92f3d
-# we must use Bash >=5.1.10, which is only available in the current testing
-# release of Debian. I know this is not the best way to do things, but until a
-# backport is available this will have to do.
-    echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
-        bash \
     && \
     apt-get autoremove -y && \
     apt-get clean && \
@@ -81,7 +83,7 @@ COPY nginx_conf.d/ /etc/nginx/conf.d/
 COPY scripts/ /scripts
 RUN chmod +x -R /scripts && \
 # Make so that the parent's entrypoint script is properly triggered (issue #21).
-    sed -ri '/^if \[ "\$1" = "nginx" -o "\$1" = "nginx-debug" \]; then$/,${s//if echo "$1" | grep -q "nginx"; then/;b};$q1' /docker-entrypoint.sh
+    sed -ri '/^if \[ "\$1" = "nginx" \] \|\| \[ "\$1" = "nginx-debug" \]; then$/,${s//if echo "$1" | grep -q "nginx"; then/;b};$q1' /docker-entrypoint.sh
 
 # Create a volume to have persistent storage for the obtained certificates.
 VOLUME /etc/letsencrypt
